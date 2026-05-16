@@ -2,6 +2,21 @@
   "$schema": "https://opencode.ai/config.json",
   "model": "openrouter/deepseek/deepseek-v4-flash:free",
   "instructions": ["AGENTS.md"],
+  "agent": {
+    "reviewer": {
+      "description": "Strict code reviewer. Audits Laravel code for security vulns, SQL injection, XSS, CSRF, auth issues, and crypto payment flaws.",
+      "mode": "subagent",
+      "permission": {
+        "edit": "deny",
+        "bash": {
+          "git *": "allow",
+          "vendor/bin/security-checker *": "allow",
+          "php artisan *": "allow",
+          "*": "ask"
+        }
+      }
+    }
+  },
   "command": {
     "docker-up": {
       "description": "Start the Docker environment",
@@ -12,6 +27,16 @@
       "description": "Run database migrations",
       "agent": "build",
       "template": "Run `docker compose exec app php artisan migrate` to apply pending migrations."
+    },
+    "security-check": {
+      "description": "Scan composer dependencies for known CVEs",
+      "agent": "build",
+      "template": "Run `vendor/bin/security-checker security:check composer.lock` to scan dependencies for known vulnerabilities."
+    },
+    "review": {
+      "description": "Full security review of all staged and unstaged changes",
+      "agent": "reviewer",
+      "template": "Run `git diff --cached` and `git diff` to review all changes. Analyze for: SQL injection, XSS, CSRF, mass assignment, authentication gaps, crypto payment logic flaws, and insecure configuration."
     }
   }
 }
