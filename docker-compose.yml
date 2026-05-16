@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wsdg-app
+    restart: unless-stopped
+    working_dir: /var/www
+    volumes:
+      - ./src:/var/www
+      - ./nginx:/etc/nginx/conf.d
+    ports:
+      - "8080:80"
+    depends_on:
+      - db
+      - redis
+    networks:
+      - wsdg
+
+  db:
+    image: postgres:16-alpine
+    container_name: wsdg-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ws_digital_generic
+      POSTGRES_USER: wsdg
+      POSTGRES_PASSWORD: wsdg_secret
+    ports:
+      - "5433:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - wsdg
+
+  redis:
+    image: redis:7-alpine
+    container_name: wsdg-redis
+    restart: unless-stopped
+    networks:
+      - wsdg
+
+  queue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wsdg-queue
+    restart: unless-stopped
+    working_dir: /var/www
+    command: php artisan queue:work --tries=3
+    volumes:
+      - ./src:/var/www
+    depends_on:
+      - db
+      - redis
+    networks:
+      - wsdg
+
+volumes:
+  db_data:
+
+networks:
+  wsdg:
+    driver: bridge
