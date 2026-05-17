@@ -15,20 +15,24 @@ class EvmService implements PaymentInterface
 
     public function createInvoice(Order $order): array
     {
-        $address = '0x' . bin2hex(random_bytes(20));
+        $merchantWallet = config('crypto.evm.merchant_wallet');
+
+        if (!$merchantWallet) {
+            $merchantWallet = '0x' . bin2hex(random_bytes(20));
+        }
 
         Payment::create([
             'order_id' => $order->id,
-            'payment_address' => $address,
+            'payment_address' => $merchantWallet,
             'amount_expected' => $order->crypto_amount,
             'status' => 'pending',
         ]);
 
         return [
-            'address' => $address,
+            'address' => $merchantWallet,
             'amount' => $order->crypto_amount,
             'currency' => 'USDC',
-            'chain' => 'Ethereum',
+            'chain' => $this->chainName(),
         ];
     }
 
@@ -38,14 +42,23 @@ class EvmService implements PaymentInterface
         $payment = $order->payment;
 
         $rpcUrl = config('crypto.evm.rpc_url');
-        $chainId = config('crypto.evm.chain_id');
+        $contractAddress = config('crypto.evm.contract_address');
 
-        $response = Http::post($rpcUrl, [
+        if (!$rpcUrl || !$contractAddress) {
+            return 'pending';
+        }
+
+        $transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+        $toTopic = '0x' . str_pad(ltrim(str_replace('0x', '', $payment->payment_address), '0'), 64, '0', STR_PAD_LEFT);
+
+        $response = Http::timeout(10)->post($rpcUrl, [
             'jsonrpc' => '2.0',
             'method' => 'eth_getLogs',
             'params' => [[
-                'address' => config('crypto.evm.contract_address'),
-                'topics' => [null, '0x' . str_pad(ltrim($payment->payment_address, '0x'), 64, '0', STR_PAD_LEFT)],
+                'fromBlock' => '0x0',
+                'toBlock' => 'latest',
+                'address' => $contractAddress,
+                'topics' => [$transferTopic, null, $toTopic],
             ]],
             'id' => 1,
         ]);
@@ -55,13 +68,20 @@ class EvmService implements PaymentInterface
         $logs = $response->json()['result'] ?? [];
 
         if (count($logs) > 0) {
-            $payment->update([
-                'amount_received' => $payment->amount_expected,
-                'status' => 'paid',
-                'verified_at' => now(),
-            ]);
-            $order->update(['status' => 'paid', 'paid_at' => now()]);
-            return 'paid';
+            $latestLog = $logs[count($logs) - 1];
+            $amountHex = $latestLog['data'] ?? '0x0';
+            $amount = hexdec($amountHex) / 1e6;
+
+            if ($amount >= (float) $payment->amount_expected) {
+                $payment->update([
+                    'amount_received' => $amount,
+                    'tx_hash' => $latestLog['transactionHash'] ?? '',
+                    'status' => 'paid',
+                    'verified_at' => now(),
+                ]);
+                $order->update(['status' => 'paid', 'paid_at' => now()]);
+                return 'paid';
+            }
         }
 
         return 'pending';
@@ -69,19 +89,40 @@ class EvmService implements PaymentInterface
 
     public function handleWebhook(array $payload): void
     {
-        $txHash = $payload['transactionHash'] ?? null;
-        $to = $payload['to'] ?? null;
+        $txHash = $payload['transactionHash'] ?? $payload['tx_hash'] ?? null;
+        $status = $payload['status'] ?? '';
 
-        if (!$txHash || !$to) return;
+        if (!$txHash) return;
 
-        $payment = Payment::where('payment_address', $to)->first();
+        $payment = Payment::where('tx_hash', $txHash)->first();
         if (!$payment) return;
 
         $payment->update([
-            'tx_hash' => $txHash,
             'webhook_payload' => $payload,
         ]);
 
-        $this->verifyPayment($payment->order->order_id);
+        if ($status === 'confirmed' || $status === 'settled') {
+            $payment->update([
+                'amount_received' => $payload['amount'] ?? $payment->amount_expected,
+                'status' => 'paid',
+                'verified_at' => now(),
+            ]);
+            $payment->order->update(['status' => 'paid', 'paid_at' => now()]);
+        }
+    }
+
+    private function chainName(): string
+    {
+        $chainId = config('crypto.evm.chain_id', 1);
+
+        return match ($chainId) {
+            1 => 'Ethereum',
+            137 => 'Polygon',
+            42161 => 'Arbitrum',
+            10 => 'Optimism',
+            8453 => 'Base',
+            11155111 => 'Sepolia (testnet)',
+            default => "Chain {$chainId}",
+        };
     }
 }

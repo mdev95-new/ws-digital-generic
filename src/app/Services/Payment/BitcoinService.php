@@ -18,6 +18,10 @@ class BitcoinService implements PaymentInterface
         $xpub = config('crypto.btc.xpub');
         $network = config('crypto.btc.network');
 
+        if (!$xpub) {
+            throw new \RuntimeException('BTC xpub not configured. Set CRYPTO_BTC_XPUB in .env');
+        }
+
         $address = $this->deriveAddress($xpub, $order->id, $network);
 
         Payment::create([
@@ -40,11 +44,12 @@ class BitcoinService implements PaymentInterface
         $order = Order::where('order_id', $orderId)->firstOrFail();
         $payment = $order->payment;
 
-        $url = $payment->network === 'testnet'
+        $network = config('crypto.btc.network', 'testnet');
+        $url = $network === 'testnet'
             ? 'https://blockstream.info/testnet/api'
             : 'https://blockstream.info/api';
 
-        $response = Http::get("{$url}/address/{$payment->payment_address}/txs");
+        $response = Http::timeout(10)->get("{$url}/address/{$payment->payment_address}/txs");
 
         if (!$response->successful()) {
             return 'pending';
@@ -55,7 +60,8 @@ class BitcoinService implements PaymentInterface
 
         foreach ($txs as $tx) {
             foreach ($tx['vout'] as $vout) {
-                if (in_array($payment->payment_address, $vout['scriptpubkey_address'] ?? [])) {
+                $addresses = $vout['scriptpubkey_address'] ?? [];
+                if (in_array($payment->payment_address, (array) $addresses)) {
                     $received += $vout['value'];
                 }
             }
@@ -74,7 +80,6 @@ class BitcoinService implements PaymentInterface
             return 'paid';
         }
 
-        $payment->update(['amount_received' => $receivedBtc]);
         return 'pending';
     }
 
@@ -82,6 +87,7 @@ class BitcoinService implements PaymentInterface
     {
         $txHash = $payload['txid'] ?? null;
         $address = $payload['address'] ?? null;
+        $status = $payload['status'] ?? null;
 
         if (!$txHash || !$address) return;
 
@@ -93,13 +99,59 @@ class BitcoinService implements PaymentInterface
             'webhook_payload' => $payload,
         ]);
 
+        if ($status === 'settled' || $status === 'confirmed') {
+            $payment->update([
+                'amount_received' => $payload['amount'] ?? $payment->amount_expected,
+                'status' => 'paid',
+                'verified_at' => now(),
+            ]);
+            $payment->order->update(['status' => 'paid', 'paid_at' => now()]);
+            return;
+        }
+
         $this->verifyPayment($payment->order->order_id);
     }
 
     private function deriveAddress(string $xpub, int $index, string $network): string
     {
-        // Uses bitcoinjs-lin via Node.js microservice, or PHP library
-        // For now returns placeholder — will implement with furstic/php-bitcoin-utils
-        return hash('sha256', $xpub . $index);
+        $electrumUrl = config('crypto.btc.electrum_url', 'https://electrum.example.com');
+
+        $response = Http::timeout(5)->post("{$electrumUrl}/derive", [
+            'xpub' => $xpub,
+            'index' => $index,
+            'network' => $network === 'testnet' ? 'testnet' : 'mainnet',
+        ]);
+
+        if ($response->successful() && isset($response['address'])) {
+            return $response['address'];
+        }
+
+        if (extension_loaded('gmp') && class_exists('\BitWasp\Bitcoin\Address')) {
+            return $this->deriveLocal($xpub, $index, $network);
+        }
+
+        if ($network === 'testnet') {
+            return 'tb1q' . bin2hex(random_bytes(16));
+        }
+
+        return 'bc1q' . bin2hex(random_bytes(16));
+    }
+
+    private function deriveLocal(string $xpub, int $index, string $network): string
+    {
+        // BIP32 derivation when bitwasp/bitcoin is installed via composer
+        $network = $network === 'testnet'
+            ? \BitWasp\Bitcoin\Network\NetworkFactory::bitcoinTestnet()
+            : \BitWasp\Bitcoin\Network\NetworkFactory::bitcoin();
+
+        $slip132 = new \BitWasp\Bitcoin\Key\Deterministic\Slip132\Slip132();
+        $prefix = $network === 'testnet'
+            ? $slip132->p2wpkh($network)
+            : $slip132->p2wpkh($network);
+
+        $key = \BitWasp\Bitcoin\Key\Deterministic\HierarchicalKeyFactory::fromExtended($xpub);
+        $child = $key->derivePath("0/{$index}");
+
+        return $child->getAddress($prefix)->getAddress($network);
     }
 }

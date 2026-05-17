@@ -10,6 +10,7 @@ return [
     'fallback_locale' => 'en',
     'cipher' => 'AES-256-CBC',
     'key' => env('APP_KEY'),
+    'admin_key' => env('ADMIN_KEY'),
     'providers' => [
         Illuminate\Auth\AuthServiceProvider::class,
         Illuminate\Broadcasting\BroadcastServiceProvider::class,

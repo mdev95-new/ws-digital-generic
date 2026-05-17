@@ -3,7 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Models\Product;
+use App\Models\Order;
+use App\Services\Payment\PaymentManager;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class StoreController extends Controller
 {
@@ -27,13 +30,28 @@ class StoreController extends Controller
             'product_id' => 'required|exists:products,id',
             'currency' => 'required|in:btc,lightning,usdc,xmr',
             'delivery_method' => 'required|in:email,telegram,whatsapp',
-            'delivery_contact' => 'required|string|max:255',
+            'delivery_contact' => [
+                'required',
+                'string',
+                'max:255',
+                function ($attribute, $value, $fail) use ($request) {
+                    $method = $request->input('delivery_method');
+                    match ($method) {
+                        'email' => !filter_var($value, FILTER_VALIDATE_EMAIL) ? $fail('Valid email required.') : null,
+                        'telegram' => !preg_match('/^@?[a-zA-Z0-9_]{5,32}$/', $value) ? $fail('Valid Telegram @username required.') : null,
+                        'whatsapp' => !preg_match('/^\+?[1-9][0-9]{6,14}$/', $value) ? $fail('Valid phone number required.') : null,
+                        default => $fail('Invalid delivery method.'),
+                    };
+                },
+            ],
             'pin' => 'nullable|digits:4|numeric',
         ]);
 
         $product = Product::findOrFail($validated['product_id']);
 
-        $orderId = 'DG-' . strtoupper(bin2hex(random_bytes(4)) . '-' . bin2hex(random_bytes(2)));
+        $orderId = 'DG-'
+            . strtoupper(bin2hex(random_bytes(5))) . '-'
+            . strtoupper(bin2hex(random_bytes(3)));
 
         $order = $product->orders()->create([
             'order_id' => $orderId,
@@ -47,7 +65,7 @@ class StoreController extends Controller
             'expires_at' => now()->addHours(24),
         ]);
 
-        $paymentInfo = app(\App\Services\Payment\PaymentManager::class)->createInvoice($order);
+        $paymentInfo = app(PaymentManager::class)->createInvoice($order);
 
         return redirect()->route('order.confirmation', [
             'orderId' => $order->order_id,

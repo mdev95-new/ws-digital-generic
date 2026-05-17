@@ -32,5 +32,7 @@ class Kernel extends HttpKernel
         'auth' => \Illuminate\Auth\Middleware\Authenticate::class,
         'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,
         'pin' => \App\Http\Middleware\PinMiddleware::class,
+        'admin.auth' => \App\Http\Middleware\AdminAuth::class,
+        'webhook.verify' => \App\Http\Middleware\VerifyWebhook::class,
     ];
 }

@@ -4,6 +4,8 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\StoreController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\AdminController;
+use App\Http\Middleware\AdminAuth;
+use App\Http\Middleware\VerifyWebhook;
 
 Route::get('/', [StoreController::class, 'index'])->name('store.index');
 Route::get('/checkout/{product:slug}', [StoreController::class, 'checkout'])->name('store.checkout');
@@ -15,7 +17,7 @@ Route::get('/order/{orderId}/confirmation', [OrderController::class, 'confirmati
 Route::get('/order/{orderId}/refresh', [OrderController::class, 'refresh'])->name('order.refresh');
 Route::get('/order/{orderId}/download', [OrderController::class, 'download'])->name('order.download');
 
-Route::prefix('admin')->group(function () {
+Route::prefix('admin')->middleware(AdminAuth::class)->group(function () {
     Route::get('/', [AdminController::class, 'dashboard'])->name('admin.dashboard');
     Route::get('/products', [AdminController::class, 'products'])->name('admin.products');
     Route::post('/products', [AdminController::class, 'storeProduct'])->name('admin.products.store');
