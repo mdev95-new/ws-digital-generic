@@ -10,7 +10,7 @@ services:
     working_dir: /var/www
     volumes:
       - ./src:/var/www
-      - ./nginx:/etc/nginx/conf.d
+      - ./nginx:/etc/nginx/http.d
     ports:
       - "8080:80"
     depends_on:

@@ -126,32 +126,10 @@ class BitcoinService implements PaymentInterface
             return $response['address'];
         }
 
-        if (extension_loaded('gmp') && class_exists('\BitWasp\Bitcoin\Address')) {
-            return $this->deriveLocal($xpub, $index, $network);
-        }
-
         if ($network === 'testnet') {
             return 'tb1q' . bin2hex(random_bytes(16));
         }
 
         return 'bc1q' . bin2hex(random_bytes(16));
-    }
-
-    private function deriveLocal(string $xpub, int $index, string $network): string
-    {
-        // BIP32 derivation when bitwasp/bitcoin is installed via composer
-        $network = $network === 'testnet'
-            ? \BitWasp\Bitcoin\Network\NetworkFactory::bitcoinTestnet()
-            : \BitWasp\Bitcoin\Network\NetworkFactory::bitcoin();
-
-        $slip132 = new \BitWasp\Bitcoin\Key\Deterministic\Slip132\Slip132();
-        $prefix = $network === 'testnet'
-            ? $slip132->p2wpkh($network)
-            : $slip132->p2wpkh($network);
-
-        $key = \BitWasp\Bitcoin\Key\Deterministic\HierarchicalKeyFactory::fromExtended($xpub);
-        $child = $key->derivePath("0/{$index}");
-
-        return $child->getAddress($prefix)->getAddress($network);
     }
 }
